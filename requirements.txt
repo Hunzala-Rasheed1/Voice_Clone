@@ -9,3 +9,5 @@ scikit-learn
 matplotlib 
 pyttsx3
 espeakng
+gTTS
+edge-tts
