@@ -1,0 +1,5 @@
+espeak
+espeak-ng
+espeak-ng-data
+libespeak-ng1
+libespeak-ng-dev
