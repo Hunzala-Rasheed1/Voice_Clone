@@ -14,7 +14,14 @@ import plotly.express as px
 import warnings
 warnings.filterwarnings('ignore')
 
-# Try to import pyttsx3
+# Try to import gTTS (Google Text-to-Speech)
+try:
+    from gtts import gTTS
+    GTTS_AVAILABLE = True
+except ImportError:
+    GTTS_AVAILABLE = False
+
+# Try to import pyttsx3 as fallback
 try:
     import pyttsx3
     PYTTSX3_AVAILABLE = True
@@ -31,17 +38,21 @@ st.set_page_config(
 
 # Language mapping
 LANGUAGES = {
-    'en': {'name': 'English', 'pyttsx3_voice': 'english'},
-    'es': {'name': 'Spanish', 'pyttsx3_voice': 'spanish'},
-    'fr': {'name': 'French', 'pyttsx3_voice': 'french'},
-    'de': {'name': 'German', 'pyttsx3_voice': 'german'},
-    'it': {'name': 'Italian', 'pyttsx3_voice': 'italian'},
-    'pt': {'name': 'Portuguese', 'pyttsx3_voice': 'portuguese'},
-    'ru': {'name': 'Russian', 'pyttsx3_voice': 'russian'},
-    'ko': {'name': 'Korean', 'pyttsx3_voice': 'korean'},
-    'ja': {'name': 'Japanese', 'pyttsx3_voice': 'japanese'},
-    'ar': {'name': 'Arabic', 'pyttsx3_voice': 'arabic'},
-    'pl': {'name': 'Polish', 'pyttsx3_voice': 'polish'}
+    'en': {'name': 'English', 'gtts_lang': 'en'},
+    'es': {'name': 'Spanish', 'gtts_lang': 'es'},
+    'fr': {'name': 'French', 'gtts_lang': 'fr'},
+    'de': {'name': 'German', 'gtts_lang': 'de'},
+    'it': {'name': 'Italian', 'gtts_lang': 'it'},
+    'pt': {'name': 'Portuguese', 'gtts_lang': 'pt'},
+    'ru': {'name': 'Russian', 'gtts_lang': 'ru'},
+    'ko': {'name': 'Korean', 'gtts_lang': 'ko'},
+    'ja': {'name': 'Japanese', 'gtts_lang': 'ja'},
+    'ar': {'name': 'Arabic', 'gtts_lang': 'ar'},
+    'pl': {'name': 'Polish', 'gtts_lang': 'pl'},
+    'zh': {'name': 'Chinese', 'gtts_lang': 'zh'},
+    'hi': {'name': 'Hindi', 'gtts_lang': 'hi'},
+    'tr': {'name': 'Turkish', 'gtts_lang': 'tr'},
+    'nl': {'name': 'Dutch', 'gtts_lang': 'nl'}
 }
 
 # Initialize session state
@@ -207,70 +218,110 @@ class VoiceProcessor:
             st.error(f"Error computing embedding: {str(e)}")
             return None
 
-class PyTTSxEngine:
-    """TTS Engine using pyttsx3"""
+class CloudTTSEngine:
+    """Cloud-compatible TTS Engine using gTTS and pyttsx3 fallback"""
     
     def __init__(self):
-        self.engine = None
         self.sample_rate = 22050
+        self.tts_engine = None
         self._initialize_engine()
     
     def _initialize_engine(self):
-        """Initialize pyttsx3 engine"""
-        try:
-            if PYTTSX3_AVAILABLE:
-                self.engine = pyttsx3.init()
-                
-                # Get available voices
-                voices = self.engine.getProperty('voices')
+        """Initialize TTS engine with fallback options"""
+        if GTTS_AVAILABLE:
+            st.session_state.tts_engine_type = "gTTS (Google)"
+            st.session_state.tts_status = "✅ gTTS Ready"
+        elif PYTTSX3_AVAILABLE:
+            try:
+                self.tts_engine = pyttsx3.init()
+                voices = self.tts_engine.getProperty('voices')
                 if voices:
                     st.session_state.available_voices = [(voice.id, voice.name) for voice in voices]
+                    st.session_state.tts_engine_type = "pyttsx3 (Local)"
+                    st.session_state.tts_status = "✅ pyttsx3 Ready"
                 else:
-                    st.session_state.available_voices = []
-            else:
-                st.error("pyttsx3 not available. Please install with: pip install pyttsx3")
-        except Exception as e:
-            st.error(f"Error initializing TTS engine: {str(e)}")
+                    st.session_state.tts_engine_type = "pyttsx3 (No Voices)"
+                    st.session_state.tts_status = "⚠️ pyttsx3 No Voices"
+            except Exception as e:
+                st.session_state.tts_engine_type = "None"
+                st.session_state.tts_status = f"❌ TTS Error: {str(e)}"
+        else:
+            st.session_state.tts_engine_type = "None"
+            st.session_state.tts_status = "❌ No TTS Engine Available"
     
     def get_available_voices(self):
         """Get list of available system voices"""
-        if self.engine:
+        if GTTS_AVAILABLE:
+            # Return gTTS supported languages
+            return [(lang_code, f"gTTS {lang_info['name']}") for lang_code, lang_info in LANGUAGES.items()]
+        elif self.tts_engine:
             try:
-                voices = self.engine.getProperty('voices')
+                voices = self.tts_engine.getProperty('voices')
                 return [(voice.id, voice.name) for voice in voices] if voices else []
             except:
                 return []
         return []
     
-    def generate_speech(self, text, voice_id=None, rate=200, volume=1.0):
-        """Generate speech using pyttsx3"""
+    def generate_speech(self, text, language='en', voice_id=None, rate=200, volume=1.0, slow=False):
+        """Generate speech using available TTS engine"""
         try:
-            if not self.engine:
-                return None
-            
-            # Create temporary file
             output_file = os.path.join(tempfile.gettempdir(), f"tts_output_{datetime.now().strftime('%H%M%S')}.wav")
             
-            # Set voice properties
-            if voice_id:
-                self.engine.setProperty('voice', voice_id)
-            
-            self.engine.setProperty('rate', rate)
-            self.engine.setProperty('volume', volume)
-            
-            # Generate speech
-            self.engine.save_to_file(text, output_file)
-            self.engine.runAndWait()
-            
-            # Check if file was created
-            if os.path.exists(output_file):
-                return output_file
+            if GTTS_AVAILABLE:
+                return self._generate_with_gtts(text, language, output_file, slow)
+            elif PYTTSX3_AVAILABLE and self.tts_engine:
+                return self._generate_with_pyttsx3(text, voice_id, rate, volume, output_file)
             else:
-                st.error("Failed to generate audio file")
+                st.error("No TTS engine available")
                 return None
                 
         except Exception as e:
             st.error(f"Error generating speech: {str(e)}")
+            return None
+    
+    def _generate_with_gtts(self, text, language, output_file, slow=False):
+        """Generate speech using gTTS"""
+        try:
+            # Get gTTS language code
+            gtts_lang = LANGUAGES.get(language, {}).get('gtts_lang', 'en')
+            
+            # Create gTTS object
+            tts = gTTS(text=text, lang=gtts_lang, slow=slow)
+            
+            # Save as MP3 first
+            mp3_file = output_file.replace('.wav', '.mp3')
+            tts.save(mp3_file)
+            
+            # Convert MP3 to WAV using librosa
+            audio, sr = librosa.load(mp3_file, sr=self.sample_rate)
+            sf.write(output_file, audio, sr)
+            
+            # Clean up MP3 file
+            if os.path.exists(mp3_file):
+                os.unlink(mp3_file)
+            
+            return output_file if os.path.exists(output_file) else None
+            
+        except Exception as e:
+            st.error(f"gTTS error: {str(e)}")
+            return None
+    
+    def _generate_with_pyttsx3(self, text, voice_id, rate, volume, output_file):
+        """Generate speech using pyttsx3"""
+        try:
+            if voice_id:
+                self.tts_engine.setProperty('voice', voice_id)
+            
+            self.tts_engine.setProperty('rate', rate)
+            self.tts_engine.setProperty('volume', volume)
+            
+            self.tts_engine.save_to_file(text, output_file)
+            self.tts_engine.runAndWait()
+            
+            return output_file if os.path.exists(output_file) else None
+            
+        except Exception as e:
+            st.error(f"pyttsx3 error: {str(e)}")
             return None
 
 def apply_voice_conversion(base_audio_path, voice_embedding, output_path, conversion_strength=0.5):
@@ -367,27 +418,33 @@ def audio_to_base64(file_path):
 
 def main():
     st.title("🎙️ Voice Cloning")
-    st.markdown("**Real voice cloning using pyttsx3 TTS engine**")
-    
-    # Check pyttsx3 availability
-    if not PYTTSX3_AVAILABLE:
-        st.error("❌ pyttsx3 not installed! Please run: `pip install pyttsx3`")
-        st.stop()
+    st.markdown("**Real voice cloning using cloud-compatible TTS engines**")
     
     # Initialize components
     voice_processor = VoiceProcessor()
-    tts_engine = PyTTSxEngine()
+    tts_engine = CloudTTSEngine()
     
     # Sidebar
     st.sidebar.title("🎛️ Voice Cloning System")
-    st.sidebar.success("✅ pyttsx3 TTS Ready")
     
-    # Check available system voices
+    # Show TTS engine status
+    engine_status = st.session_state.get('tts_status', '❌ Unknown')
+    engine_type = st.session_state.get('tts_engine_type', 'Unknown')
+    
+    st.sidebar.write(f"**TTS Engine:** {engine_type}")
+    if engine_status.startswith('✅'):
+        st.sidebar.success(engine_status)
+    elif engine_status.startswith('⚠️'):
+        st.sidebar.warning(engine_status)
+    else:
+        st.sidebar.error(engine_status)
+    
+    # Check available voices
     available_voices = tts_engine.get_available_voices()
     if available_voices:
-        st.sidebar.success(f"✅ {len(available_voices)} System Voices Found")
+        st.sidebar.success(f"✅ {len(available_voices)} Voices Available")
     else:
-        st.sidebar.warning("⚠️ No system voices detected")
+        st.sidebar.warning("⚠️ No voices detected")
     
     # Main tabs
     tab1, tab2, tab3, tab4 = st.tabs(["🎤 Voice Training", "🗣️ Speech Generation", "📊 Analysis", "📈 Results"])
@@ -466,13 +523,16 @@ def speech_generation_tab(tts_engine):
                 "Select Voice Profile",
                 list(st.session_state.voice_profiles.keys())
             )
+            
+            # Get language from voice profile
+            voice_language = st.session_state.voice_profiles[selected_voice]['language']
         else:
             st.warning("⚠️ Please train a voice profile first!")
             return
         
-        # System voice selection
+        # System voice selection (for pyttsx3 only)
         available_voices = tts_engine.get_available_voices()
-        if available_voices:
+        if available_voices and not GTTS_AVAILABLE:
             system_voice_options = ["Auto"] + [f"{name} ({voice_id[:30]}...)" for voice_id, name in available_voices]
             selected_system_voice = st.selectbox("System Voice", system_voice_options)
             
@@ -484,7 +544,6 @@ def speech_generation_tab(tts_engine):
                 selected_voice_id = None
         else:
             selected_voice_id = None
-            st.warning("No system voices available")
         
         # Text input
         text_input = st.text_area(
@@ -497,8 +556,14 @@ def speech_generation_tab(tts_engine):
         # Generation settings
         col_set1, col_set2 = st.columns(2)
         with col_set1:
-            rate = st.slider("Speech Rate", 50, 400, 200, help="Words per minute")
-            volume = st.slider("Volume", 0.1, 1.0, 0.9, 0.1)
+            if GTTS_AVAILABLE:
+                slow_speech = st.checkbox("Slow Speech", value=False)
+                rate = 200  # Not used for gTTS
+                volume = 1.0  # Not used for gTTS
+            else:
+                rate = st.slider("Speech Rate", 50, 400, 200, help="Words per minute")
+                volume = st.slider("Volume", 0.1, 1.0, 0.9, 0.1)
+                slow_speech = False
         
         with col_set2:
             apply_cloning = st.checkbox("Apply Voice Cloning", value=True)
@@ -506,7 +571,8 @@ def speech_generation_tab(tts_engine):
         
         if st.button("🎵 Generate Speech", type="primary") and text_input.strip():
             generate_speech_with_cloning(tts_engine, selected_voice, text_input, 
-                                       selected_voice_id, rate, volume, apply_cloning, conversion_strength)
+                                       voice_language, selected_voice_id, rate, volume, 
+                                       slow_speech, apply_cloning, conversion_strength)
     
     with col2:
         st.subheader("🎛️ Current Settings")
@@ -520,6 +586,9 @@ def speech_generation_tab(tts_engine):
             
             if 'embedding' in profile:
                 st.write(f"**Embedding Size:** {len(profile['embedding'])}")
+        
+        # Show TTS engine info
+        st.write(f"**TTS Engine:** {st.session_state.get('tts_engine_type', 'Unknown')}")
         
         # Recent generations
         if st.session_state.generated_audio:
@@ -571,6 +640,7 @@ def results_tab():
                 st.write(f"**Text:** {result['text']}")
                 st.write(f"**Voice Profile:** {result['voice_profile']}")
                 st.write(f"**Generated:** {result['timestamp']}")
+                st.write(f"**TTS Engine:** {result.get('tts_engine', 'Unknown')}")
                 
                 # Audio player
                 if result.get('audio_base64'):
@@ -586,7 +656,8 @@ def results_tab():
             
             with col2:
                 st.metric("Duration", f"{result.get('duration', 0):.1f}s")
-                st.metric("Rate", f"{result.get('rate', 0)} WPM")
+                if result.get('rate'):
+                    st.metric("Rate", f"{result['rate']} WPM")
                 cloned_status = "✅ Yes" if result.get('voice_cloned', False) else "❌ No"
                 st.write(f"**Voice Cloned:** {cloned_status}")
                 
@@ -615,266 +686,4 @@ def train_voice_profile(voice_processor, uploaded_files, voice_name, language):
             sample_count = len(uploaded_files)
             base_quality = min(0.9, 0.5 + (sample_count / 20) * 0.4)
             embedding_consistency = 1.0 - (np.std(embedding) / (np.mean(np.abs(embedding)) + 1e-6))
-            embedding_consistency = np.clip(embedding_consistency, 0, 1)
-            
-            quality_score = (base_quality + embedding_consistency) / 2
-            quality_score = np.clip(quality_score, 0.1, 0.95)
-            
-            # Store profile
-            st.session_state.voice_profiles[voice_name] = {
-                'embedding': embedding,
-                'language': language,
-                'sample_count': sample_count,
-                'quality_score': quality_score,
-                'created': datetime.now().strftime("%Y-%m-%d %H:%M")
-            }
-            
-            progress_bar.progress(1.0)
-            status_text.text("✅ Voice profile created successfully!")
-            st.success(f"🎉 Voice profile '{voice_name}' created with {sample_count} samples (Quality: {quality_score:.2f})")
-        else:
-            st.error("❌ Failed to extract voice characteristics. Please check audio quality.")
-            
-    except Exception as e:
-        st.error(f"Error training voice profile: {str(e)}")
-
-def generate_speech_with_cloning(tts_engine, voice_name, text, voice_id, rate, volume, apply_cloning, conversion_strength):
-    """Generate speech with voice cloning"""
-    try:
-        with st.spinner("Generating speech..."):
-            
-            # Generate base speech with pyttsx3
-            base_audio_path = tts_engine.generate_speech(text, voice_id, rate, volume)
-            
-            if not base_audio_path or not os.path.exists(base_audio_path):
-                st.error("❌ Failed to generate base speech")
-                return
-            
-            profile = st.session_state.voice_profiles[voice_name]
-            final_audio_path = base_audio_path
-            voice_cloned = False
-            
-            # Apply voice cloning if requested and embedding available
-            if apply_cloning and 'embedding' in profile:
-                cloned_audio_path = os.path.join(tempfile.gettempdir(), f"cloned_{voice_name}_{datetime.now().strftime('%H%M%S')}.wav")
-                
-                voice_cloned = apply_voice_conversion(
-                    base_audio_path, 
-                    profile['embedding'], 
-                    cloned_audio_path, 
-                    conversion_strength
-                )
-                
-                if voice_cloned and os.path.exists(cloned_audio_path):
-                    final_audio_path = cloned_audio_path
-            
-            # Convert to base64 for playback
-            audio_base64 = audio_to_base64(final_audio_path)
-            
-            if audio_base64:
-                # Calculate duration
-                try:
-                    audio, sr = librosa.load(final_audio_path, sr=22050)
-                    duration = len(audio) / sr
-                except:
-                    duration = len(text.split()) * 0.3  # Estimate based on word count
-                
-                # Store result
-                result = {
-                    'text': text,
-                    'voice_profile': voice_name,
-                    'audio_base64': audio_base64,
-                    'duration': duration,
-                    'rate': rate,
-                    'volume': volume,
-                    'voice_cloned': voice_cloned,
-                    'conversion_strength': conversion_strength if apply_cloning else 0,
-                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                }
-                
-                st.session_state.generated_audio.append(result)
-                
-                st.success("✅ Speech generated successfully!")
-                
-                # Play audio immediately
-                audio_html = f"""
-                <audio controls autoplay style="width: 100%;">
-                    <source src="data:audio/wav;base64,{audio_base64}" type="audio/wav">
-                    Your browser does not support the audio element.
-                </audio>
-                """
-                st.markdown(audio_html, unsafe_allow_html=True)
-                
-                # Show metrics
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.info(f"🕐 Duration: {duration:.1f}s")
-                with col2:
-                    st.info(f"🎯 Rate: {rate} WPM")
-                with col3:
-                    cloned_status = "✅ Yes" if voice_cloned else "❌ No"
-                    st.info(f"🎭 Voice Cloned: {cloned_status}")
-            
-            # Clean up temporary files
-            try:
-                if os.path.exists(base_audio_path):
-                    os.unlink(base_audio_path)
-                if final_audio_path != base_audio_path and os.path.exists(final_audio_path):
-                    os.unlink(final_audio_path)
-            except:
-                pass
-                
-    except Exception as e:
-        st.error(f"Error generating speech: {str(e)}")
-
-def show_voice_analysis(profile_name):
-    """Show detailed analysis of voice profile"""
-    try:
-        profile = st.session_state.voice_profiles[profile_name]
-        
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.markdown("#### 📊 Profile Information")
-            st.metric("Language", LANGUAGES[profile['language']]['name'])
-            st.metric("Sample Count", profile['sample_count'])
-            st.metric("Quality Score", f"{profile['quality_score']:.3f}")
-            
-            # Quality assessment
-            quality = profile['quality_score']
-            if quality > 0.8:
-                st.success("🟢 Excellent voice quality")
-            elif quality > 0.6:
-                st.warning("🟡 Good voice quality")
-            else:
-                st.error("🔴 Poor quality - needs more samples")
-        
-        with col2:
-            st.markdown("#### 🎯 Voice Characteristics")
-            
-            if 'embedding' in profile:
-                embedding = profile['embedding']
-                st.metric("Embedding Size", len(embedding))
-                st.metric("Embedding Range", f"{np.min(embedding):.3f} to {np.max(embedding):.3f}")
-                st.metric("Embedding Mean", f"{np.mean(embedding):.3f}")
-                st.metric("Embedding Std", f"{np.std(embedding):.3f}")
-        
-        # Embedding visualization
-        if 'embedding' in profile:
-            st.markdown("#### 🎵 Voice Feature Visualization")
-            
-            embedding = profile['embedding']
-            
-            # Split embedding into meaningful parts
-            mfcc_part = embedding[:20] if len(embedding) >= 20 else embedding
-            spectral_part = embedding[40:49] if len(embedding) >= 49 else []
-            
-            col_viz1, col_viz2 = st.columns(2)
-            
-            with col_viz1:
-                # MFCC visualization
-                fig_mfcc = go.Figure()
-                fig_mfcc.add_trace(go.Scatter(
-                    y=mfcc_part,
-                    mode='lines+markers',
-                    name='MFCC Features',
-                    line=dict(color='blue')
-                ))
-                fig_mfcc.update_layout(
-                    title="MFCC Coefficients",
-                    xaxis_title="Coefficient Index",
-                    yaxis_title="Value",
-                    height=300
-                )
-                st.plotly_chart(fig_mfcc, use_container_width=True)
-            
-            with col_viz2:
-                # Spectral features
-                if len(spectral_part) > 0:
-                    feature_names = ['Centroid', 'Centroid_Std', 'Rolloff', 'ZCR', 'Pitch_Mean', 'Pitch_Std', 'Pitch_Range', 'Energy', 'RMS']
-                    feature_names = feature_names[:len(spectral_part)]
-                    
-                    fig_spectral = go.Figure()
-                    fig_spectral.add_trace(go.Bar(
-                        x=feature_names,
-                        y=spectral_part,
-                        name='Spectral Features'
-                    ))
-                    fig_spectral.update_layout(
-                        title="Spectral Features",
-                        xaxis_title="Feature",
-                        yaxis_title="Value",
-                        height=300
-                    )
-                    fig_spectral.update_xaxes(tickangle=45)
-                    st.plotly_chart(fig_spectral, use_container_width=True)
-            
-    except Exception as e:
-        st.error(f"Error in voice analysis: {str(e)}")
-
-def show_voice_comparison(selected_profiles):
-    """Show comparison between voice profiles"""
-    try:
-        comparison_data = []
-        
-        for profile_name in selected_profiles:
-            profile = st.session_state.voice_profiles[profile_name]
-            
-            comparison_data.append({
-                'Profile': profile_name,
-                'Language': LANGUAGES[profile['language']]['name'],
-                'Samples': profile['sample_count'],
-                'Quality': f"{profile['quality_score']:.3f}",
-                'Embedding Size': len(profile.get('embedding', [])),
-                'Created': profile['created']
-            })
-        
-        df = pd.DataFrame(comparison_data)
-        st.dataframe(df, use_container_width=True)
-        
-        # Feature comparison radar chart
-        if all('embedding' in st.session_state.voice_profiles[p] for p in selected_profiles):
-            st.subheader("Voice Characteristic Comparison")
-            
-            fig = go.Figure()
-            
-            for profile_name in selected_profiles:
-                embedding = st.session_state.voice_profiles[profile_name]['embedding']
-                
-                # Extract key features for comparison
-                if len(embedding) >= 49:
-                    features = {
-                        'Pitch': embedding[46] / 300.0,  # Normalize pitch
-                        'Energy': embedding[47] * 1000,  # Scale energy
-                        'Spectral Centroid': embedding[40] / 3000.0,  # Normalize centroid
-                        'Spectral Rolloff': embedding[42] / 5000.0,  # Normalize rolloff
-                        'MFCC Variance': np.std(embedding[:20]),  # MFCC variability
-                    }
-                    
-                    categories = list(features.keys())
-                    values = list(features.values())
-                    
-                    # Normalize values to 0-1 range for radar chart
-                    values = [(v - min(values)) / (max(values) - min(values) + 1e-6) for v in values]
-                    
-                    fig.add_trace(go.Scatterpolar(
-                        r=values,
-                        theta=categories,
-                        fill='toself',
-                        name=profile_name
-                    ))
-            
-            fig.update_layout(
-                polar=dict(radialaxis=dict(visible=True, range=[0, 1])),
-                showlegend=True,
-                title="Voice Profile Comparison",
-                height=500
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-    except Exception as e:
-        st.error(f"Error in comparison: {str(e)}")
-
-if __name__ == "__main__":
-    main()
+            embedding_consistency = np.clip
