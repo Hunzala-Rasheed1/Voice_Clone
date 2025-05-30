@@ -51,8 +51,8 @@ Perfect for YouTube content creators, content localization, accessibility applic
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/voice-cloning-poc.git
-cd voice-cloning-poc
+git clone https://github.com/Hunzala-Rasheed1/Voice_Clone.git
+cd voice_clone
 
 # Create virtual environment
 python -m venv venv_voice_clone
