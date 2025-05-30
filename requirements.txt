@@ -8,3 +8,4 @@ scipy
 scikit-learn 
 matplotlib 
 pyttsx3
+espeakng
